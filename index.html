@@ -169,6 +169,16 @@ textarea{min-height:130px;font-family:ui-monospace,Menlo,monospace;font-size:12p
 .tiles.sm .stat b{font-size:17px;}
 .tiles+.tiles{margin-top:8px;}
 .card .tiles{margin-top:10px;}
+
+/* badges */
+.bgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;}
+.badge{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:12px;text-align:center;opacity:.78;}
+.badge.on{opacity:1;border-color:var(--tabon);}
+.badge .bi{font-size:34px;line-height:1.15;filter:grayscale(1);}
+.badge.on .bi{filter:none;}
+.badge .bt{font-weight:800;font-size:14px;margin-top:4px;}
+.badge .bd,.badge .bp{font-size:12px;color:var(--muted);margin-top:2px;}
+.badge .bp{font-weight:700;}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;}}
 </style>
 </head>
@@ -258,10 +268,12 @@ function normalize(){
   if(!S.me.id) S.me.id=uid();
   if(!S.players||typeof S.players!=="object"||Array.isArray(S.players)) S.players={};
   if(S.sync&&(typeof S.sync!=="object"||!S.sync.url||!S.sync.code)) S.sync=null;
+  if(!Array.isArray(S.goals)) S.goals=[];
 }
 normalize();
 function persist(){try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}}
-function save(){persist();markDirty();}
+var badgeTimer=null;
+function save(){persist();markDirty();clearTimeout(badgeTimer);badgeTimer=setTimeout(checkBadges,600);}
 function byId(id){return S.skills.filter(function(s){return s.id===id;})[0];}
 function skillLabel(sk){
   var dup=S.skills.filter(function(o){return o.name===sk.name;}).length>1;
@@ -437,11 +449,11 @@ var calFilter="all", statFilter="", statRange=7;
 var wake=null;
 
 function go(v){view=v;render();window.scrollTo(0,0);}
-function tabOf(n){return (n==="cal"||n==="day")?"cal":(n==="stats"?"stats":((n==="team"||n==="share"||n==="addplayer"||n==="syncsetup"||n==="syncwho")?"team":"home"));}
+function tabOf(n){return (n==="cal"||n==="day")?"cal":(n==="stats"?"stats":((n==="team"||n==="share"||n==="addplayer"||n==="syncsetup"||n==="syncwho"||n==="badges"||n==="addgoal")?"team":"home"));}
 
 function render(){
   releaseWake();
-  var fn={home:renderHome,skill:renderSkill,add:renderAdd,manage:renderManage,backup:renderBackup,cal:renderCal,day:renderDay,stats:renderStats,team:renderTeam,share:renderShare,addplayer:renderAddPlayer,syncsetup:renderSyncSetup,syncwho:renderSyncWho}[view.name];
+  var fn={home:renderHome,skill:renderSkill,add:renderAdd,manage:renderManage,backup:renderBackup,cal:renderCal,day:renderDay,stats:renderStats,team:renderTeam,share:renderShare,addplayer:renderAddPlayer,syncsetup:renderSyncSetup,syncwho:renderSyncWho,badges:renderBadges,addgoal:renderAddGoal}[view.name];
   fn();
   var cur=tabOf(view.name);
   Array.prototype.forEach.call(document.querySelectorAll("#tabs button"),function(b){
@@ -465,7 +477,7 @@ function sideRows(sk){
 function tile(v,l){return '<div class="stat"><b>'+v+'</b><span>'+l+'</span></div>';}
 function pills(list,cur,act){
   var h='<div class="pills">';
-  list.forEach(function(p){h+='<button class="pill" data-act="'+act+'" data-v="'+p[0]+'" aria-pressed="'+(cur===p[0])+'">'+p[1]+'</button>';});
+  list.forEach(function(p){h+='<button class="pill" data-act="'+act+'" data-v="'+esc(p[0])+'" aria-pressed="'+(cur===p[0])+'">'+esc(p[1])+'</button>';});
   return h+'</div>';
 }
 function filterPills(cur,act,allowAll){
@@ -761,7 +773,7 @@ function summaryTiles(skills){
     +tile(activeDaysLast(set,7),'active days, last 7')+tile(fmt(repsTotal(skills)),'reps logged')+tile(fmt(Math.round(km*10)/10)+' km','distance logged')+'</div>';
 }
 function renderStats(){
-  var h='<h1>Stats</h1><p class="sub">How the training is going.</p>'+summaryTiles(S.skills);
+  var h='<h1>Stats</h1><p class="sub">How the training is going.</p>'+summaryTiles(S.skills)+badgeRow({me:true,skills:S.skills},"stats");
   if(S.skills.length){
     if(!byId(statFilter)) statFilter=S.skills[0].id;
     h+='<h2>Daily activity</h2>'+filterPills(statFilter,"statf",false);
@@ -914,6 +926,211 @@ function teamSkillKeys(players){
   return out;
 }
 
+/* ---------- badges ---------- */
+var BADGE_DEFS=[
+  ["first","🌱","First log","Log your first activity","days",1,""],
+  ["streak3","🔥","3-day streak","Be active 3 days in a row","streak",3," days"],
+  ["streak7","⚡","7-day streak","Be active 7 days in a row","streak",7," days"],
+  ["streak14","🚀","14-day streak","Be active 14 days in a row","streak",14," days"],
+  ["streak30","👑","30-day streak","Be active 30 days in a row","streak",30," days"],
+  ["reps1k","💪","1,000 reps","Log 1,000 reps in total","reps",1000,""],
+  ["reps5k","🏋️","5,000 reps","Log 5,000 reps in total","reps",5000,""],
+  ["reps10k","🏉","10,000 club","Log 10,000 reps in total","reps",10000,""],
+  ["km10","👟","10 km","Cover 10 km in total","km",10," km"],
+  ["km50","🥾","50 km","Cover 50 km in total","km",50," km"],
+  ["km100","🏅","100 km","Cover 100 km in total","km",100," km"],
+  ["km250","🎖️","250 km","Cover 250 km in total","km",250," km"],
+  ["km500","🌍","500 km","Cover 500 km in total","km",500," km"],
+  ["run5","🏃","5 km effort","Run or walk 5 km in one go","longest",5," km"],
+  ["run10","🥈","10 km effort","Run or walk 10 km in one go","longest",10," km"],
+  ["run21","🥇","Half marathon","Run or walk 21.1 km in one go","longest",21.1," km"],
+  ["week5","📅","5-day week","Be active on 5 days in one week","weekdays",5," days"],
+  ["week7","⭐","Perfect week","Be active every day of a week","weekdays",7," days"],
+  ["mix3","🎯","All-rounder","Do 3 different activities in one week","variety",3,""],
+  ["goal1","✅","Goal getter","Reach a total goal on an activity","goals",1,""],
+  ["goal3","🏆","Goal crusher","Reach total goals on 3 activities","goals",3,""]
+];
+function badgeStats(skills){
+  var set=activeSet(skills), weeks={}, longest=0, goals=0;
+  skills.forEach(function(sk){
+    activeDays(sk).forEach(function(d){
+      var dt=parseKey(d), wk=addDays(d,-((dt.getDay()+6)%7));
+      var w=weeks[wk]||(weeks[wk]={days:{},acts:{}});
+      w.days[d]=1; w.acts[sk.id]=1;
+    });
+    if(isCardio(sk)&&(sk.pace||"perkm")==="perkm"){
+      (sk.sessions||[]).forEach(function(x){var k=toKm(sk,x.d); if(k>longest) longest=k;});
+    }
+    if((sk.period||"total")==="total"){
+      sk.sides.forEach(function(sd){ if(sd.target>0&&total(sk,sd.id)>=sd.target) goals++; });
+    }
+  });
+  var wd=0, wv=0;
+  Object.keys(weeks).forEach(function(k){
+    wd=Math.max(wd,Object.keys(weeks[k].days).length);
+    wv=Math.max(wv,Object.keys(weeks[k].acts).length);
+  });
+  return {days:Object.keys(set).length,streak:longestStreak(set),reps:repsTotal(skills),km:kmTotal(skills),longest:longest,weekdays:wd,variety:wv,goals:goals};
+}
+function badgeList(skills){
+  var st=badgeStats(skills);
+  return BADGE_DEFS.map(function(d){
+    var cur=st[d[4]]||0;
+    return {id:d[0],icon:d[1],title:d[2],desc:d[3],cur:cur,need:d[5],unit:d[6],earned:cur>=d[5]};
+  });
+}
+function checkBadges(){
+  var list=badgeList(S.skills), ids=list.filter(function(b){return b.earned;}).map(function(b){return b.id;});
+  if(!Array.isArray(S.badges)){ S.badges=ids; persist(); return; }
+  var fresh=ids.filter(function(id){return S.badges.indexOf(id)<0;});
+  if(!fresh.length) return;
+  S.badges=S.badges.concat(fresh); persist();
+  var b=list.filter(function(x){return x.id===fresh[0];})[0];
+  setTimeout(function(){ toast("New badge: "+b.icon+" "+b.title+(fresh.length>1?" (+"+(fresh.length-1)+" more)":"")); buzz([50,40,50,40,120]); },2600);
+}
+function badgeRow(p,back){
+  var list=badgeList(p.skills), got=list.filter(function(b){return b.earned;});
+  return '<button class="btn wide" style="margin-top:10px;text-align:left" data-act="badges" data-id="'+(p.me?"me":esc(p.id||""))+'" data-back="'+back+'">'
+    +(got.length?got.slice(-8).map(function(b){return b.icon;}).join(" ")+' · ':'')+got.length+' of '+list.length+' badges</button>';
+}
+function renderBadges(){
+  var p=view.id==="me"?{name:shareName()||"You",skills:S.skills}:S.players[view.id];
+  if(!p) return go({name:"team"});
+  var list=badgeList(p.skills), got=list.filter(function(b){return b.earned;});
+  var locked=list.filter(function(b){return !b.earned;}).sort(function(a,b){return b.cur/b.need-a.cur/a.need;});
+  var h='<div class="top"><button class="icon" data-act="tab" data-tab="'+(view.back||"team")+'" aria-label="Back">←</button><h1>'+(view.id==="me"?"My badges":esc(p.name)+"'s badges")+'</h1></div>';
+  h+='<p class="sub">'+got.length+' of '+list.length+' earned</p><div class="bgrid">';
+  got.concat(locked).forEach(function(b){
+    h+='<div class="badge'+(b.earned?' on':'')+'"><div class="bi">'+b.icon+'</div><div class="bt">'+esc(b.title)+'</div><div class="bd">'+esc(b.desc)+'</div>'
+      +(b.earned?'':'<div class="bp">'+fmt(Math.round(b.cur*10)/10)+' / '+fmt(b.need)+b.unit+'</div>')+'</div>';
+  });
+  app.innerHTML=h+'</div>';
+}
+
+/* ---------- family goals ---------- */
+function keysFor(period){
+  if(period==="year"){
+    var tk=today(), t=parseKey(tk), n=Math.floor((t-new Date(t.getFullYear(),0,1))/86400000)+1, keys=[];
+    for(var i=0;i<n;i++) keys.push(addDays(tk,-i));
+    return keys;
+  }
+  return periodKeys(period);
+}
+function daysLeft(period){
+  var t=parseKey(today());
+  if(period==="week") return 6-((t.getDay()+6)%7);
+  if(period==="month") return new Date(t.getFullYear(),t.getMonth()+1,0).getDate()-t.getDate();
+  return Math.round((new Date(t.getFullYear(),11,31)-t)/86400000);
+}
+function cleanGoals(arr){
+  var out=[];
+  (Array.isArray(arr)?arr:[]).slice(0,20).forEach(function(g){
+    if(!g||typeof g!=="object") return;
+    var t=parseFloat(g.target); if(!(t>0)||!isFinite(t)||t>10000000) return;
+    out.push({id:String(g.id||uid()).replace(/[^A-Za-z0-9]/g,"").slice(0,20)||uid(),metric:String(g.metric||"days").slice(0,100),
+      period:["week","month","year"].indexOf(g.period)>=0?g.period:"week",mode:g.mode==="together"?"together":"each",target:t,name:String(g.name||"").slice(0,40)});
+  });
+  return out;
+}
+function goalInfo(g,keys){
+  if(g.metric==="days") return {name:"active days",unit:" days",days:true};
+  var k=keys.filter(function(x){return x.key===g.metric;})[0];
+  return {name:k?k.name:String(g.metric).split("|")[1]||"activity",unit:k?k.unit:"",days:false};
+}
+function goalTitle(g,info){
+  if(g.name) return g.name;
+  var per={week:"this week",month:"this month",year:"this year"}[g.period];
+  var what=info.days?fmt(g.target)+" active days":info.name+" "+fmt(g.target)+info.unit;
+  return g.mode==="together"?what+" together "+per:"Everyone: "+what+" "+per;
+}
+function goalsHtml(players,keys){
+  var h='<h2>Family goals</h2>';
+  if(!S.goals.length) h+='<p class="note">Set a goal for the whole family, like 500 km together this month.</p>';
+  S.goals.forEach(function(g){
+    var info=goalInfo(g,keys), ks=keysFor(g.period), vals=players.map(function(p){return chalValue(p,g.metric,ks);});
+    var u=info.days?"":info.unit, left=daysLeft(g.period);
+    var h2='<div class="card"><div class="head"><span class="name" style="font-size:17px">'+esc(goalTitle(g,info))+'</span><span class="sport">'+left+(left===1?' day left':' days left')+'</span></div>';
+    if(g.mode==="together"){
+      var sum=vals.reduce(function(a,b){return a+b;},0);
+      h2+='<div class="mini"><div class="lbl"><span>'+(sum>=g.target?'Goal reached!':'Family total')+'</span><b>'+fmt(Math.round(sum*100)/100)+u+' / '+fmt(g.target)+u+'</b></div><div class="bar" style="--c:var(--good)"><i style="width:'+pct(sum,g.target)+'%"></i></div></div>';
+      h2+='<div class="note" style="margin-bottom:0">'+players.map(function(p,i){return '<i class="dot" style="background:'+PLAYER_COLORS[i%6]+'"></i>'+esc(p.name)+' '+fmt(Math.round(vals[i]*100)/100)+u;}).join(' &nbsp; ')+'</div>';
+    } else {
+      players.forEach(function(p,i){
+        var met=vals[i]>=g.target;
+        h2+='<div class="mini"><div class="lbl"><span><i class="dot" style="background:'+PLAYER_COLORS[i%6]+'"></i>'+esc(p.name)+(met?' · done':'')+'</span><b>'+fmt(Math.round(vals[i]*100)/100)+u+' / '+fmt(g.target)+u+'</b></div><div class="bar" style="--c:'+(met?'var(--good)':PLAYER_COLORS[i%6])+'"><i style="width:'+pct(vals[i],g.target)+'%"></i></div></div>';
+      });
+    }
+    h2+='<button class="linkbtn" data-act="goaldel" data-id="'+esc(g.id)+'">Delete this goal</button></div>';
+    h+=h2;
+  });
+  return h+'<button class="btn wide" data-act="goal-new">Add a family goal</button>';
+}
+var goalDelArmed=null;
+function renderAddGoal(){
+  var f=view.gf||(view.gf={metric:"days",period:"week",mode:"each",target:"",name:""});
+  var keys=teamSkillKeys(allPlayers().concat([{skills:S.skills}])), info=goalInfo({metric:f.metric},keys);
+  var list=[["days","Active days"]].concat(keys.map(function(k){
+    var dup=keys.filter(function(o){return o.name===k.name;}).length>1;
+    return [k.key,dup?k.name+" ("+k.sport+")":k.name];
+  }));
+  var h='<div class="top"><button class="icon" data-act="tab" data-tab="team" aria-label="Back">←</button><h1>Add a family goal</h1></div>';
+  h+='<label>Goal is about</label>'+pills(list,f.metric,"gmetric");
+  h+='<label>How long</label>'+pills([["week","This week"],["month","This month"],["year","This year"]],f.period,"gperiod");
+  h+='<label>Who</label>'+pills([["each","Everyone on their own"],["together","All together"]],f.mode,"gmode");
+  h+='<label for="gTarget">Target'+(info.days?' (days)':(info.unit?' ('+esc(info.unit.trim())+')':''))+'</label><input type="number" inputmode="decimal" min="0" id="gTarget" value="'+esc(f.target)+'" placeholder="e.g. 100">';
+  h+='<label for="gName">Name (optional)</label><input type="text" id="gName" maxlength="40" value="'+esc(f.name)+'" placeholder="e.g. Summer of running">';
+  h+='<div style="margin-top:16px"><button class="btn primary wide" data-act="goalcreate">Add goal</button></div>';
+  app.innerHTML=h;
+}
+function readGoalForm(){
+  var f=view.gf; if(!f) return;
+  var t=document.getElementById("gTarget"); if(t) f.target=t.value;
+  var n=document.getElementById("gName"); if(n) f.name=n.value;
+}
+function pushGoals(){
+  S.goalsDirty=true; persist();
+  if(!syncOn()) return Promise.resolve();
+  return rawCall(S.sync.url,S.sync.code,"push",{id:"familygoals",name:"Family goals",data:JSON.stringify({skills:[],goals:S.goals}),rows:[]})
+    .then(function(res){ if(!res.ok) throw new Error(res.error||"failed"); S.goalsDirty=false; persist(); })
+    .catch(function(e){ sync.err=friendlyErr(e); });
+}
+
+/* ---------- family challenge ---------- */
+var chalMetric="days", chalPeriod="week";
+function ord(n){var s=["th","st","nd","rd"],v=n%100;return n+(s[(v-20)%10]||s[v]||s[0]);}
+function chalValue(p,metric,keys){
+  if(metric==="days"){var set=activeSet(p.skills);return keys.filter(function(k){return set[k];}).length;}
+  return keys.reduce(function(a,k){return a+pDay(p,metric,k);},0);
+}
+function challengeHtml(players,keys){
+  if(chalMetric!=="days"&&!keys.some(function(k){return k.key===chalMetric;})) chalMetric="days";
+  var pk=chalPeriod==="today"?[today()]:periodKeys(chalPeriod);
+  var per={today:"today",week:"this week",month:"this month"}[chalPeriod];
+  var unit=chalMetric==="days"?"":((keys.filter(function(k){return k.key===chalMetric;})[0]||{unit:""}).unit);
+  var rows=players.map(function(p,i){return {name:p.name,i:i,v:chalValue(p,chalMetric,pk)};}).sort(function(a,b){return b.v-a.v;});
+  var top=rows[0].v, leaders=rows.filter(function(r){return r.v===top;});
+  var rank=0, prev=null;
+  rows.forEach(function(r,idx){ if(r.v!==prev){rank=idx+1;prev=r.v;} r.rank=rank; });
+  var msg=top<=0?"No one has logged anything "+per+" yet.":(leaders.length>1?"Tied at the top "+per:esc(leaders[0].name)+" leads "+per);
+  var h='<h2>Family challenge</h2><div class="card"><div class="pills">';
+  h+='<button class="pill" data-act="chalm" data-v="days" aria-pressed="'+(chalMetric==="days")+'">Active days</button>';
+  keys.forEach(function(k){
+    var dup=keys.filter(function(o){return o.name===k.name;}).length>1;
+    h+='<button class="pill" data-act="chalm" data-v="'+esc(k.key)+'" aria-pressed="'+(chalMetric===k.key)+'">'+esc(dup?k.name+" ("+k.sport+")":k.name)+'</button>';
+  });
+  h+='</div><div class="pills" style="margin-top:8px">';
+  [["today","Today"],["week","This week"],["month","This month"]].forEach(function(p){
+    h+='<button class="pill" data-act="chalp" data-v="'+p[0]+'" aria-pressed="'+(chalPeriod===p[0])+'">'+p[1]+'</button>';
+  });
+  h+='</div><div class="name" style="font-size:17px;font-weight:800;margin:14px 0 2px">'+msg+'</div>';
+  rows.forEach(function(r){
+    var val=chalMetric==="days"?fmt(r.v)+(r.v===1?" day":" days"):fmt(r.v)+unit;
+    h+='<div class="mini"><div class="lbl"><span><b>'+ord(r.rank)+'</b> · <i class="dot" style="background:'+PLAYER_COLORS[r.i%6]+'"></i>'+esc(r.name)+'</span><b>'+val+'</b></div>'
+      +'<div class="bar" style="--c:'+PLAYER_COLORS[r.i%6]+'"><i style="width:'+(top>0?r.v/top*100:0)+'%"></i></div></div>';
+  });
+  return h+'</div>';
+}
+
 function renderTeam(){
   var players=allPlayers(), h='<h1>Team</h1><p class="sub">See everyone\'s stats in one place.</p>';
   h+=syncCard();
@@ -928,10 +1145,12 @@ function renderTeam(){
   } else if(players.length<2){
     h+='<p class="note">No one else has joined yet. Connect the other phones to see them here.</p>';
   }
+  if(players.length>=2) h+=challengeHtml(players,teamSkillKeys(players));
+  if(players.length>=1) h+=goalsHtml(players,teamSkillKeys(players.concat([{skills:S.skills}])));
   players.forEach(function(p,i){
     h+='<div class="card" style="margin-top:12px"><div class="head"><span class="name"><i class="dot" style="background:'+PLAYER_COLORS[i%6]+'"></i>'+esc(p.name)+(p.me?' (this phone)':'')+'</span>'
       +'<span class="sport">'+(p.at?'updated '+shortDay(keyOf(new Date(p.at))):'live')+'</span></div>'
-      +summaryTiles(p.skills)
+      +summaryTiles(p.skills)+badgeRow(p,"team")
       +(p.me?'':'<button class="linkbtn" data-act="prm" data-id="'+esc(p.id)+'">Remove this player</button>')
       +'</div>';
   });
@@ -1064,8 +1283,12 @@ function syncFlush(keep){
 }
 function applyFamily(list){
   sync.raw=list;
-  var before=JSON.stringify(S.players), seen={};
+  var before=JSON.stringify([S.players,S.goals]), seen={};
   list.forEach(function(p){
+    if(p&&p.id==="familygoals"){
+      if(!S.goalsDirty){ try{var go=JSON.parse(p.data); if(go&&Array.isArray(go.goals)) S.goals=cleanGoals(go.goals);}catch(e){} }
+      return;
+    }
     if(!p||!/^[A-Za-z0-9]{3,20}$/.test(String(p.id))||p.id===S.me.id) return;
     var obj; try{obj=JSON.parse(p.data);}catch(e){return;}
     if(!obj||!Array.isArray(obj.skills)) return;
@@ -1073,7 +1296,7 @@ function applyFamily(list){
     S.players[p.id]={id:p.id,name:String(p.name||"Player").slice(0,30),skills:cleanSkills(obj.skills),at:p.at||0,via:"sync"};
   });
   Object.keys(S.players).forEach(function(id){ if(S.players[id].via==="sync"&&!seen[id]) delete S.players[id]; });
-  return before!==JSON.stringify(S.players);
+  return before!==JSON.stringify([S.players,S.goals]);
 }
 function syncPull(force){
   if(!syncOn()) return Promise.resolve();
@@ -1085,6 +1308,7 @@ function syncPull(force){
       if(!res.ok) throw new Error(res.error||"failed");
       var changed=applyFamily(res.players||[]);
       sync.err=""; S.sync.pulledAt=Date.now(); persist();
+      if(S.goalsDirty||(S.goals.length&&!(res.players||[]).some(function(p){return p.id==="familygoals";}))) pushGoals();
       if(view.name==="team"&&(changed||force||sync.errShown)){ sync.errShown=false; renderTeam(); }
     })
     .catch(function(e){ sync.pulling=false; sync.err=friendlyErr(e); sync.errShown=true; if(view.name==="team") renderTeam(); });
@@ -1127,7 +1351,7 @@ function renderSyncSetup(){
   app.innerHTML=h;
 }
 function renderSyncWho(){
-  var fam=(sync.raw||[]).filter(function(p){return p&&p.id;});
+  var fam=(sync.raw||[]).filter(function(p){return p&&p.id&&p.id!=="familygoals";});
   var h='<div class="top"><button class="icon" data-act="tab" data-tab="team" aria-label="Back">←</button><h1>Who is this phone?</h1></div>';
   if(fam.length){
     h+='<p class="sub">Tap your name if you are already in the family.</p>';
@@ -1170,6 +1394,7 @@ document.addEventListener("click",function(e){
   var el=e.target.closest("[data-act]"); if(!el||el.disabled) return;
   var act=el.dataset.act, sk, i, f;
   if(view.name==="add") readForm();
+  if(view.name==="addgoal") readGoalForm();
   switch(act){
     case "tab":
       if(el.dataset.tab==="home") go({name:"home"});
@@ -1244,6 +1469,27 @@ document.addEventListener("click",function(e){
         setTimeout(function(){remPlayer=null;if(view.name==="team")renderTeam();},4000);
       } else { delete S.players[el.dataset.id]; remPlayer=null; persist(); renderTeam(); toast("Player removed"); }
       break;
+    case "badges": go({name:"badges",id:el.dataset.id,back:el.dataset.back||"team"}); break;
+    case "goal-new": go({name:"addgoal"}); break;
+    case "gmetric": view.gf.metric=el.dataset.v; renderAddGoal(); break;
+    case "gperiod": view.gf.period=el.dataset.v; renderAddGoal(); break;
+    case "gmode": view.gf.mode=el.dataset.v; renderAddGoal(); break;
+    case "goalcreate":
+      var gt=parseFloat(String(view.gf.target).replace(",","."));
+      if(!(gt>0)){toast("Enter a target");break;}
+      S.goals.push({id:uid(),metric:view.gf.metric,period:view.gf.period,mode:view.gf.mode,target:gt,name:(view.gf.name||"").trim().slice(0,40)});
+      view.gf=null; pushGoals(); go({name:"team"}); toast("Goal added");
+      break;
+    case "goaldel":
+      if(goalDelArmed!==el.dataset.id){
+        goalDelArmed=el.dataset.id; el.textContent="Tap again to delete";
+        var gid=el.dataset.id; setTimeout(function(){goalDelArmed=null;var b=document.querySelector('[data-act="goaldel"][data-id="'+gid+'"]');if(b)b.textContent="Delete this goal";},4000);
+      } else {
+        S.goals=S.goals.filter(function(g){return g.id!==el.dataset.id;}); goalDelArmed=null; pushGoals(); renderTeam(); toast("Goal deleted");
+      }
+      break;
+    case "chalm": chalMetric=el.dataset.v; renderTeam(); break;
+    case "chalp": chalPeriod=el.dataset.v; renderTeam(); break;
     case "teamf": teamFilter=el.dataset.v; renderTeam(); break;
     case "teamr": teamRange=parseInt(el.dataset.v,10); renderTeam(); break;
 
@@ -1357,6 +1603,7 @@ document.addEventListener("visibilitychange",function(){
 });
 setInterval(function(){ if(syncOn()&&view.name==="team"&&document.visibilityState==="visible") syncPull(); },60000);
 
+if(!Array.isArray(S.badges)){ S.badges=badgeList(S.skills).filter(function(b){return b.earned;}).map(function(b){return b.id;}); persist(); }
 render();
 if(syncOn()){ if(syncMember()&&S.sync.dirty) syncFlush(); syncPull(); }
 })();
