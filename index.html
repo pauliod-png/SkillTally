@@ -257,9 +257,11 @@ function normalize(){
   if(!S.me||typeof S.me!=="object") S.me={id:uid(),name:""};
   if(!S.me.id) S.me.id=uid();
   if(!S.players||typeof S.players!=="object"||Array.isArray(S.players)) S.players={};
+  if(S.sync&&(typeof S.sync!=="object"||!S.sync.url||!S.sync.code)) S.sync=null;
 }
 normalize();
-function save(){try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}}
+function persist(){try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}}
+function save(){persist();markDirty();}
 function byId(id){return S.skills.filter(function(s){return s.id===id;})[0];}
 function skillLabel(sk){
   var dup=S.skills.filter(function(o){return o.name===sk.name;}).length>1;
@@ -435,11 +437,11 @@ var calFilter="all", statFilter="", statRange=7;
 var wake=null;
 
 function go(v){view=v;render();window.scrollTo(0,0);}
-function tabOf(n){return (n==="cal"||n==="day")?"cal":(n==="stats"?"stats":((n==="team"||n==="share"||n==="addplayer")?"team":"home"));}
+function tabOf(n){return (n==="cal"||n==="day")?"cal":(n==="stats"?"stats":((n==="team"||n==="share"||n==="addplayer"||n==="syncsetup"||n==="syncwho")?"team":"home"));}
 
 function render(){
   releaseWake();
-  var fn={home:renderHome,skill:renderSkill,add:renderAdd,manage:renderManage,backup:renderBackup,cal:renderCal,day:renderDay,stats:renderStats,team:renderTeam,share:renderShare,addplayer:renderAddPlayer}[view.name];
+  var fn={home:renderHome,skill:renderSkill,add:renderAdd,manage:renderManage,backup:renderBackup,cal:renderCal,day:renderDay,stats:renderStats,team:renderTeam,share:renderShare,addplayer:renderAddPlayer,syncsetup:renderSyncSetup,syncwho:renderSyncWho}[view.name];
   fn();
   var cur=tabOf(view.name);
   Array.prototype.forEach.call(document.querySelectorAll("#tabs button"),function(b){
@@ -914,12 +916,17 @@ function teamSkillKeys(players){
 
 function renderTeam(){
   var players=allPlayers(), h='<h1>Team</h1><p class="sub">See everyone\'s stats in one place.</p>';
-  h+='<div class="row"><button class="btn primary" style="flex:1" data-act="addp-go">Add a player</button><button class="btn" style="flex:1" data-act="share-go">Share my stats</button></div>';
-  if(players.length<2){
-    h+='<div class="card" style="margin-top:14px"><div class="name" style="font-size:17px;font-weight:800;margin-bottom:4px">How it works</div>'
-      +'<ol class="steps"><li>On each player\'s phone, open Team, tap Share my stats and send the code to this phone.</li>'
-      +'<li>On this phone, tap Add a player and paste the code.</li>'
-      +'<li>Repeat whenever you want fresh numbers. Adding a code again updates that player.</li></ol></div>';
+  h+=syncCard();
+  if(!syncOn()){
+    h+='<div class="row" style="margin-top:12px"><button class="btn" style="flex:1" data-act="addp-go">Add a player by code</button><button class="btn" style="flex:1" data-act="share-go">Share my stats</button></div>';
+    if(players.length<2){
+      h+='<div class="card" style="margin-top:14px"><div class="name" style="font-size:17px;font-weight:800;margin-bottom:4px">Without family sync</div>'
+        +'<ol class="steps"><li>On each player\'s phone, open Team, tap Share my stats and send the code to this phone.</li>'
+        +'<li>On this phone, tap Add a player by code and paste the code.</li>'
+        +'<li>Repeat whenever you want fresh numbers.</li></ol></div>';
+    }
+  } else if(players.length<2){
+    h+='<p class="note">No one else has joined yet. Connect the other phones to see them here.</p>';
   }
   players.forEach(function(p,i){
     h+='<div class="card" style="margin-top:12px"><div class="head"><span class="name"><i class="dot" style="background:'+PLAYER_COLORS[i%6]+'"></i>'+esc(p.name)+(p.me?' (this phone)':'')+'</span>'
@@ -999,8 +1006,153 @@ async function addPlayer(){
   if(obj.id===S.me.id){ toast("That's this phone's own code"); return; }
   var name=String(obj.name||"Player").slice(0,30);
   S.players[obj.id]={id:obj.id,name:name,skills:cleanSkills(obj.skills),at:Date.now()};
-  save(); go({name:"team"}); toast("Added "+name);
+  persist(); go({name:"team"}); toast("Added "+name);
 }
+
+
+/* ---------- family sync through a Google Sheet ---------- */
+var sync={busy:false,pulling:false,timer:null,err:"",raw:[],ver:0,offArmed:false,confirmId:null};
+function syncOn(){return !!(S.sync&&S.sync.url&&S.sync.code);}
+function syncMember(){return syncOn()&&S.sync.mode==="member";}
+function friendlyErr(e){
+  var m=String((e&&e.message)||e||"");
+  if(m==="bad_code") return "The family code doesn't match the one in your script.";
+  if(m==="set_code") return "Change the family code inside the script first.";
+  if(m==="bad_reply") return "Couldn't read the reply. Check the web app is set to share with Anyone.";
+  if(/Failed to fetch|NetworkError|Load failed|TypeError/i.test(m)) return "Couldn't reach the sheet. Check your connection and the address.";
+  return "Sync problem: "+m.slice(0,80);
+}
+function rawCall(url,code,action,extra,keep){
+  var body=JSON.stringify(Object.assign({action:action,code:code},extra||{}));
+  return fetch(url,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:body,keepalive:!!keep&&body.length<60000})
+    .then(function(r){return r.text();})
+    .then(function(t){try{return JSON.parse(t);}catch(e){throw new Error("bad_reply");}});
+}
+function logRows(skills){
+  var rows=[];
+  skills.forEach(function(sk){
+    if(isCardio(sk)){
+      (sk.sessions||[]).forEach(function(x){rows.push([x.date,sk.sport,sk.name,"Session",x.d,sk.unit,round3(x.t)]);});
+    } else {
+      Object.keys(sk.log).sort().forEach(function(d){
+        sk.sides.forEach(function(s){var v=sk.log[d][s.id]; if(v>0) rows.push([d,sk.sport,sk.name,s.label,v,"reps",""]);});
+      });
+    }
+  });
+  return rows.slice(0,20000);
+}
+function markDirty(){
+  if(!syncMember()) return;
+  sync.ver++; S.sync.dirty=true; persist();
+  clearTimeout(sync.timer); sync.timer=setTimeout(syncFlush,4000);
+}
+function syncFlush(keep){
+  clearTimeout(sync.timer);
+  if(!syncMember()||!S.sync.dirty||sync.busy) return Promise.resolve();
+  sync.busy=true;
+  var ver=sync.ver, data=JSON.stringify({skills:S.skills});
+  return rawCall(S.sync.url,S.sync.code,"push",{id:S.me.id,name:shareName()||"Player",data:data,rows:logRows(S.skills)},keep===true)
+    .then(function(res){
+      sync.busy=false;
+      if(!res.ok) throw new Error(res.error||"failed");
+      sync.err=""; S.sync.pushedAt=Date.now();
+      if(sync.ver===ver) S.sync.dirty=false; else { clearTimeout(sync.timer); sync.timer=setTimeout(syncFlush,2000); }
+      persist();
+    })
+    .catch(function(e){ sync.busy=false; sync.err=friendlyErr(e); clearTimeout(sync.timer); sync.timer=setTimeout(syncFlush,30000); })
+    .then(function(){ if(view.name==="team") renderTeam(); });
+}
+function applyFamily(list){
+  sync.raw=list;
+  var before=JSON.stringify(S.players), seen={};
+  list.forEach(function(p){
+    if(!p||!/^[A-Za-z0-9]{3,20}$/.test(String(p.id))||p.id===S.me.id) return;
+    var obj; try{obj=JSON.parse(p.data);}catch(e){return;}
+    if(!obj||!Array.isArray(obj.skills)) return;
+    seen[p.id]=1;
+    S.players[p.id]={id:p.id,name:String(p.name||"Player").slice(0,30),skills:cleanSkills(obj.skills),at:p.at||0,via:"sync"};
+  });
+  Object.keys(S.players).forEach(function(id){ if(S.players[id].via==="sync"&&!seen[id]) delete S.players[id]; });
+  return before!==JSON.stringify(S.players);
+}
+function syncPull(force){
+  if(!syncOn()) return Promise.resolve();
+  if(sync.pulling) return Promise.resolve();
+  sync.pulling=true;
+  return rawCall(S.sync.url,S.sync.code,"pull",{})
+    .then(function(res){
+      sync.pulling=false;
+      if(!res.ok) throw new Error(res.error||"failed");
+      var changed=applyFamily(res.players||[]);
+      sync.err=""; S.sync.pulledAt=Date.now(); persist();
+      if(view.name==="team"&&(changed||force||sync.errShown)){ sync.errShown=false; renderTeam(); }
+    })
+    .catch(function(e){ sync.pulling=false; sync.err=friendlyErr(e); sync.errShown=true; if(view.name==="team") renderTeam(); });
+}
+function agoText(ms){
+  if(!ms) return "never";
+  var m=Math.round((Date.now()-ms)/60000);
+  if(m<1) return "just now";
+  if(m<60) return m+" min ago";
+  var h=Math.round(m/60);
+  if(h<24) return h+" h ago";
+  return shortDay(keyOf(new Date(ms)));
+}
+function syncCard(){
+  var h='<div class="card" style="margin-top:12px">';
+  if(!syncOn()){
+    h+='<div class="head"><span class="name">Family sync</span></div><div class="note" style="margin-top:0">Share everyone\'s stats automatically through a Google Sheet. No codes to send.</div>'
+      +'<div style="margin-top:10px"><button class="btn primary wide" data-act="sync-setup">Set up family sync</button></div>';
+  } else {
+    var who=S.sync.mode==="watch"?"Watching the family":(S.sync.mode==="member"?"Syncing as "+esc(shareName()||"you"):"Not finished");
+    h+='<div class="head"><span class="name">Family sync</span><span class="sport">'+who+'</span></div>';
+    if(!S.sync.mode){
+      h+='<button class="btn primary wide" data-act="sync-change">Choose who this phone is</button>';
+    } else {
+      h+='<div class="note" style="margin-top:0;'+(sync.err?'color:var(--danger)':'')+'">'+(sync.err?esc(sync.err):'Last updated '+agoText(S.sync.pulledAt))
+        +(!sync.err&&syncMember()&&S.sync.dirty?' · changes waiting to upload':'')+'</div>';
+      h+='<div class="row" style="margin-top:8px"><button class="btn" style="flex:1" data-act="syncnow">Sync now</button><button class="btn" style="flex:1" data-act="sync-change">Change who I am</button></div>';
+    }
+    h+='<button class="linkbtn" data-act="syncoff" id="syncOff">Disconnect this phone</button>';
+  }
+  return h+'</div>';
+}
+function renderSyncSetup(){
+  var h='<div class="top"><button class="icon" data-act="tab" data-tab="team" aria-label="Back">←</button><h1>Family sync</h1></div>';
+  h+='<p class="sub">Paste the web app address and the family code from your Google Sheet script.</p>';
+  h+='<label for="syUrl">Web app address</label><input type="text" id="syUrl" value="'+esc((S.sync&&S.sync.url)||"")+'" placeholder="https://script.google.com/macros/s/…/exec" autocapitalize="off" autocomplete="off">';
+  h+='<label for="syCode">Family code</label><input type="text" id="syCode" value="'+esc((S.sync&&S.sync.code)||"")+'" autocapitalize="off" autocomplete="off">';
+  h+='<div style="margin-top:14px"><button class="btn primary wide" data-act="syncconnect">Connect</button></div>';
+  h+='<p class="note">Treat the code like a password. Anyone with the address and code can see and add stats.</p>';
+  app.innerHTML=h;
+}
+function renderSyncWho(){
+  var fam=(sync.raw||[]).filter(function(p){return p&&p.id;});
+  var h='<div class="top"><button class="icon" data-act="tab" data-tab="team" aria-label="Back">←</button><h1>Who is this phone?</h1></div>';
+  if(fam.length){
+    h+='<p class="sub">Tap your name if you are already in the family.</p>';
+    fam.forEach(function(p){h+='<button class="btn wide" style="margin-bottom:8px" data-act="syncme" data-id="'+esc(p.id)+'">'+esc(p.name)+(p.id===S.me.id?' (this phone)':'')+'</button>';});
+  } else {
+    h+='<p class="sub">No one has joined yet. You can be the first.</p>';
+  }
+  h+='<label for="syName">New here? Your name</label><input type="text" id="syName" value="'+esc(S.me.name)+'" maxlength="30" placeholder="e.g. Sam">';
+  h+='<div style="margin-top:10px"><button class="btn primary wide" data-act="syncnew">Add me to the family</button></div>';
+  h+='<div style="margin-top:18px"><button class="btn wide" data-act="syncwatch">Just watching</button></div>';
+  h+='<p class="note">Watching shows everyone\'s stats on this phone without sharing anything from it.</p>';
+  app.innerHTML=h;
+}
+function adoptPlayer(id){
+  var p=(sync.raw||[]).filter(function(x){return x.id===id;})[0]; if(!p) return;
+  if(id!==S.me.id){
+    var obj=null; try{obj=JSON.parse(p.data);}catch(e){}
+    var skills=(obj&&Array.isArray(obj.skills))?cleanSkills(obj.skills):[];
+    S.skills=skills.length?skills:seed().skills;
+    S.me={id:id,name:String(p.name||"").slice(0,30)};
+  }
+  delete S.players[id];
+  S.sync.mode="member"; S.sync.dirty=false; persist();
+}
+function hasLocalData(){return S.skills.some(function(sk){return allTotal(sk)>0;});}
 
 /* ---------- wake lock ---------- */
 function releaseWake(){try{if(wake){wake.release();wake=null;}}catch(e){}}
@@ -1025,6 +1177,57 @@ document.addEventListener("click",function(e){
       else if(el.dataset.tab==="team") go({name:"team"});
       else go({name:"stats"});
       break;
+    case "sync-setup": go({name:"syncsetup"}); break;
+    case "syncconnect":
+      var sUrl=document.getElementById("syUrl").value.trim(), sCode=document.getElementById("syCode").value.trim();
+      if(!/^https:\/\/script\.google(usercontent)?\.com\//.test(sUrl)){toast("That doesn't look like a Google Apps Script address");break;}
+      if(!sCode){toast("Enter the family code");break;}
+      el.disabled=true; el.textContent="Connecting…";
+      rawCall(sUrl,sCode,"pull",{}).then(function(res){
+        if(!res.ok) throw new Error(res.error||"failed");
+        S.sync={url:sUrl,code:sCode,mode:"",dirty:false,pulledAt:Date.now()};
+        applyFamily(res.players||[]); persist(); go({name:"syncwho"});
+      }).catch(function(err){ el.disabled=false; el.textContent="Connect"; toast(friendlyErr(err)); });
+      break;
+    case "sync-change":
+      toast("Checking the family…");
+      rawCall(S.sync.url,S.sync.code,"pull",{}).then(function(res){
+        if(!res.ok) throw new Error(res.error||"failed");
+        applyFamily(res.players||[]); persist(); go({name:"syncwho"});
+      }).catch(function(err){ toast(friendlyErr(err)); });
+      break;
+    case "syncme":
+      var pid=el.dataset.id;
+      if(pid!==S.me.id&&hasLocalData()&&sync.confirmId!==pid){
+        sync.confirmId=pid; el.textContent="Tap again to replace this phone's counts";
+        setTimeout(function(){sync.confirmId=null;},5000); break;
+      }
+      sync.confirmId=null; adoptPlayer(pid);
+      go({name:"team"}); toast("Connected"); syncPull(true);
+      break;
+    case "syncnew":
+      var nm=document.getElementById("syName").value.trim().slice(0,30);
+      if(!nm){toast("Add your name first");break;}
+      S.me.name=nm; S.sync.mode="member"; S.sync.dirty=true; sync.ver++; persist();
+      go({name:"team"}); toast("Connected");
+      syncFlush().then(function(){return syncPull(true);});
+      break;
+    case "syncwatch":
+      S.sync.mode="watch"; S.sync.dirty=false; persist();
+      go({name:"team"}); toast("Connected"); syncPull(true);
+      break;
+    case "syncnow":
+      toast("Syncing…");
+      syncFlush().then(function(){return syncPull(true);}).then(function(){ toast(sync.err?"Sync failed":"Up to date"); });
+      break;
+    case "syncoff":
+      if(!sync.offArmed){ sync.offArmed=true; el.textContent="Tap again to disconnect"; setTimeout(function(){sync.offArmed=false;var b=document.getElementById("syncOff");if(b)b.textContent="Disconnect this phone";},4000); }
+      else {
+        sync.offArmed=false; S.sync=null; sync.err="";
+        Object.keys(S.players).forEach(function(id){delete S.players[id].via;});
+        persist(); renderTeam(); toast("Disconnected. Your counts stay on this phone.");
+      }
+      break;
     case "share-go": go({name:"share"}); break;
     case "addp-go": go({name:"addplayer"}); break;
     case "copycode": if(needName()) break; copyText(document.getElementById("shCode").value,document.getElementById("shCode")); break;
@@ -1039,7 +1242,7 @@ document.addEventListener("click",function(e){
       if(remPlayer!==el.dataset.id){
         remPlayer=el.dataset.id; el.textContent="Tap again to remove";
         setTimeout(function(){remPlayer=null;if(view.name==="team")renderTeam();},4000);
-      } else { delete S.players[el.dataset.id]; remPlayer=null; save(); renderTeam(); toast("Player removed"); }
+      } else { delete S.players[el.dataset.id]; remPlayer=null; persist(); renderTeam(); toast("Player removed"); }
       break;
     case "teamf": teamFilter=el.dataset.v; renderTeam(); break;
     case "teamr": teamRange=parseInt(el.dataset.v,10); renderTeam(); break;
@@ -1148,7 +1351,14 @@ document.addEventListener("change",function(e){
   }
 });
 
+document.addEventListener("visibilitychange",function(){
+  if(document.visibilityState==="hidden"){ if(syncMember()&&S.sync.dirty) syncFlush(true); }
+  else if(syncOn()&&view.name==="team") syncPull();
+});
+setInterval(function(){ if(syncOn()&&view.name==="team"&&document.visibilityState==="visible") syncPull(); },60000);
+
 render();
+if(syncOn()){ if(syncMember()&&S.sync.dirty) syncFlush(); syncPull(); }
 })();
 
 </script>
