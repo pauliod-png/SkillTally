@@ -193,6 +193,10 @@ select{width:100%;min-height:48px;padding:10px 12px;border-radius:12px;border:1p
 /* red accents */
 h2::before{content:"";display:inline-block;width:4px;height:16px;background:var(--solo);border-radius:2px;margin-right:8px;vertical-align:-2px;}
 .month h2::before{display:none;}
+/* events */
+input[type=time]{width:100%;min-height:48px;padding:10px 12px;border-radius:12px;border:1px solid var(--line);background:var(--surface);user-select:text;-webkit-user-select:text;}
+.rp.soon{color:var(--solo);border-color:var(--solo);}
+.cell.ev::after{content:"";position:absolute;top:4px;right:5px;width:7px;height:7px;border-radius:50%;background:var(--solo);}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;}}
 </style>
 </head>
@@ -285,6 +289,7 @@ function normalize(){
   if(S.sync&&(typeof S.sync!=="object"||!S.sync.url||!S.sync.code)) S.sync=null;
   if(!Array.isArray(S.goals)) S.goals=[];
   if(!Array.isArray(S.games)) S.games=[];
+  if(!Array.isArray(S.events)) S.events=[];
 }
 normalize();
 function persist(){try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}}
@@ -391,36 +396,56 @@ function recomputeDay(sk,date){
   (sk.sessions||[]).forEach(function(x){if(x.date===date){d+=x.d;t+=x.t;}});
   if(d<=0&&t<=0) delete sk.log[date]; else sk.log[date]={d:round3(d),t:round3(t)};
 }
-function addSession(sk,date,dist,mins){
+function addSession(sk,date,dist,mins,note,effort){
   sk.sessions=sk.sessions||[];
-  sk.sessions.push({id:uid(),date:date,d:round3(dist),t:round3(mins)});
+  sk.sessions.push({id:uid(),date:date,d:round3(dist),t:round3(mins),note:note||"",effort:effort||0});
   recomputeDay(sk,date); save();
+}
+function updateSession(sk,id,date,dist,mins,note,effort){
+  var x=(sk.sessions||[]).filter(function(y){return y.id===id;})[0]; if(!x) return;
+  var oldDate=x.date;
+  x.date=date; x.d=round3(dist); x.t=round3(mins); x.note=note||""; x.effort=effort||0;
+  recomputeDay(sk,oldDate); if(oldDate!==date) recomputeDay(sk,date);
+  save();
 }
 function removeSession(sk,id){
   var s=(sk.sessions||[]).filter(function(x){return x.id===id;})[0]; if(!s) return;
   sk.sessions=sk.sessions.filter(function(x){return x.id!==id;});
   recomputeDay(sk,s.date); save();
 }
-function sessionForm(sk,date,withDate){
-  var h='<div class="sform" data-skill="'+sk.id+'"'+(withDate?'':' data-date="'+date+'"')+'>';
-  h+='<label>Distance ('+esc(sk.unit)+')</label><input type="number" inputmode="decimal" step="any" min="0" data-f="d" placeholder="e.g. 5.2" aria-label="Distance">';
+var EFFORT=["","Easy","Steady","Solid","Hard","All out"];
+function effortSelect(sel,attr){
+  var o='<option value="">Not set</option>';
+  for(var i=1;i<=5;i++) o+='<option value="'+i+'"'+(String(sel)===String(i)?' selected':'')+'>'+i+' – '+EFFORT[i]+'</option>';
+  return '<select '+attr+' aria-label="Effort">'+o+'</select>';
+}
+function sessionForm(sk,date,withDate,pre,editId){
+  pre=pre||{};
+  function v(k){return pre[k]==null?"":esc(pre[k]);}
+  var h='<div class="sform" data-skill="'+sk.id+'"'+(withDate?'':' data-date="'+date+'"')+(editId?' data-sid="'+esc(editId)+'"':'')+'>';
+  h+='<label>Distance ('+esc(sk.unit)+')</label><input type="number" inputmode="decimal" step="any" min="0" data-f="d" value="'+v("d")+'" placeholder="e.g. 5.2" aria-label="Distance">';
   h+='<label>Time</label><div class="tgrid">'
-    +'<div><input type="number" inputmode="numeric" min="0" data-f="h" placeholder="0" aria-label="Hours"><span>hr</span></div>'
-    +'<div><input type="number" inputmode="numeric" min="0" data-f="m" placeholder="0" aria-label="Minutes"><span>min</span></div>'
-    +'<div><input type="number" inputmode="numeric" min="0" data-f="s" placeholder="0" aria-label="Seconds"><span>sec</span></div></div>';
-  if(withDate) h+='<label>Date</label><input type="date" data-f="date" value="'+date+'" max="'+today()+'">';
-  h+='<div style="margin-top:12px"><button class="btn primary wide" data-act="addsess">Save session</button></div></div>';
+    +'<div><input type="number" inputmode="numeric" min="0" data-f="h" value="'+v("h")+'" placeholder="0" aria-label="Hours"><span>hr</span></div>'
+    +'<div><input type="number" inputmode="numeric" min="0" data-f="m" value="'+v("m")+'" placeholder="0" aria-label="Minutes"><span>min</span></div>'
+    +'<div><input type="number" inputmode="decimal" step="0.01" min="0" data-f="s" value="'+v("s")+'" placeholder="0" aria-label="Seconds"><span>sec</span></div></div>';
+  if(withDate) h+='<label>Date</label><input type="date" data-f="date" value="'+esc(date)+'" max="'+today()+'">';
+  h+='<label>Note (optional)</label><input type="text" data-f="note" maxlength="60" value="'+v("note")+'" placeholder="e.g. hill loop, felt strong">';
+  h+='<label>How hard was it? (optional)</label>'+effortSelect(pre.effort,'data-f="effort"');
+  if(editId) h+='<div class="row" style="margin-top:12px"><button class="btn primary" style="flex:1" data-act="savesess">Save changes</button><button class="btn" style="flex:1" data-act="scancel">Cancel</button></div></div>';
+  else h+='<div style="margin-top:12px"><button class="btn primary wide" data-act="addsess">Save session</button></div></div>';
   return h;
 }
 function readSession(box){
   function f(k){var e=box.querySelector('[data-f="'+k+'"]');return e?e.value:"";}
-  var h=parseInt(f("h"),10)||0, m=parseInt(f("m"),10)||0, s=parseInt(f("s"),10)||0;
-  return {dist:num(f("d")),mins:Math.max(0,h)*60+Math.max(0,m)+Math.max(0,s)/60,date:f("date")||box.dataset.date};
+  var h=parseInt(f("h"),10)||0, m=parseInt(f("m"),10)||0, s=parseFloat(String(f("s")||"").replace(",","."))||0;
+  return {dist:num(f("d")),mins:Math.max(0,h)*60+Math.max(0,m)+Math.max(0,s)/60,date:f("date")||box.dataset.date,note:String(f("note")||"").trim().slice(0,60),effort:Math.min(5,Math.max(0,parseInt(f("effort"),10)||0))};
 }
 function sessionRow(sk,x,showDate){
   return '<div class="srow"><div><b>'+fmt(x.d)+' '+esc(sk.unit)+'</b> in '+fmtDur(x.t)
-    +'<div class="note" style="margin:2px 0 0">'+(showDate?midDay(x.date)+' · ':'')+paceStr(sk,x.d,x.t)+'</div></div>'
-    +'<button class="linkbtn" data-act="dsess" data-skill="'+sk.id+'" data-id="'+x.id+'">Delete</button></div>';
+    +'<div class="note" style="margin:2px 0 0">'+(showDate?midDay(x.date)+' · ':'')+paceStr(sk,x.d,x.t)+(x.effort?' · Effort '+x.effort+'/5 ('+EFFORT[x.effort]+')':'')+'</div>'
+    +(x.note?'<div class="note" style="margin:2px 0 0">'+esc(x.note)+'</div>':'')+'</div>'
+    +'<div style="display:flex;gap:2px"><button class="linkbtn" data-act="sedit" data-skill="'+sk.id+'" data-id="'+x.id+'">Edit</button>'
+    +'<button class="linkbtn" data-act="dsess" data-skill="'+sk.id+'" data-id="'+x.id+'">Delete</button></div></div>';
 }
 
 /* ---------- changing counts ---------- */
@@ -465,11 +490,11 @@ var calFilter="all", statFilter="", statRange=7;
 var wake=null;
 
 function go(v){view=v;render();window.scrollTo(0,0);}
-function tabOf(n){return (n==="season")?"stats":(n==="famname")?"home":(n==="games"||n==="addgame"||n==="gamedetail")?"games":(n==="cal"||n==="day")?"cal":(n==="stats"?"stats":((n==="team"||n==="share"||n==="addplayer"||n==="syncsetup"||n==="syncwho"||n==="badges"||n==="addgoal")?"team":"home"));}
+function tabOf(n){return (n==="season"||n==="records")?"stats":(n==="famname")?"home":(n==="games"||n==="addgame"||n==="gamedetail")?"games":(n==="cal"||n==="day")?"cal":(n==="stats"?"stats":((n==="team"||n==="share"||n==="addplayer"||n==="syncsetup"||n==="syncwho"||n==="badges"||n==="addgoal")?"team":"home"));}
 
 function render(){
   releaseWake();
-  var fn={home:renderHome,skill:renderSkill,add:renderAdd,manage:renderManage,backup:renderBackup,cal:renderCal,day:renderDay,stats:renderStats,team:renderTeam,share:renderShare,addplayer:renderAddPlayer,syncsetup:renderSyncSetup,syncwho:renderSyncWho,badges:renderBadges,addgoal:renderAddGoal,games:renderGames,addgame:renderAddGame,gamedetail:renderGameDetail,season:renderSeason,famname:renderFamName}[view.name];
+  var fn={home:renderHome,skill:renderSkill,add:renderAdd,manage:renderManage,backup:renderBackup,cal:renderCal,day:renderDay,stats:renderStats,team:renderTeam,share:renderShare,addplayer:renderAddPlayer,syncsetup:renderSyncSetup,syncwho:renderSyncWho,badges:renderBadges,addgoal:renderAddGoal,games:renderGames,addgame:renderAddGame,gamedetail:renderGameDetail,season:renderSeason,famname:renderFamName,editsess:renderEditSess,events:renderEvents,addevent:renderAddEvent,records:renderRecords}[view.name];
   fn();
   var cur=tabOf(view.name);
   Array.prototype.forEach.call(document.querySelectorAll("#tabs button"),function(b){
@@ -542,6 +567,9 @@ function renderHome(){
   });
   if(!syncOn()&&players.length<2) h+='<div class="note" style="margin-bottom:0">Connect the family on the Team tab to see everyone here.</div>';
   h+='</div>';
+  var up=upcomingEvents().slice(0,3);
+  h+='<h2>Coming up</h2><div class="card">'+(up.length?up.map(evRow).join(""):'<div class="note" style="margin:0">Nothing scheduled yet. Add a game, race or training day.</div>')
+    +'<div class="row" style="margin-top:10px"><button class="btn" style="flex:1" data-act="evadd" data-date="'+today()+'">Add an event</button>'+(S.events.length?'<button class="btn" style="flex:1" data-act="events">All events</button>':'')+'</div></div>';
   if(S.goals.length){
     var keys=teamSkillKeys(wp.concat([{skills:S.skills}]));
     h+='<h2>Family goals</h2>'+S.goals.slice(0,2).map(function(g){return goalMini(g,wp,keys);}).join("");
@@ -554,7 +582,7 @@ function renderHome(){
   S.skills.forEach(function(sk){
     h+='<button class="card" data-act="open" data-id="'+sk.id+'"><div class="head"><span class="name">'+esc(sk.name)+'</span><span class="sport">'+esc(sk.sport)+' · today '+todayLine(sk)+'</span></div>'+sideRows(sk)+'</button>';
   });
-  h+='<div class="row" style="margin-top:6px"><button class="btn primary" style="flex:1" data-act="add-new">Add an activity</button><button class="btn" data-act="season" data-back="home">Season</button><button class="btn" data-act="backup">Backup</button></div>';
+  h+='<button class="btn primary wide" style="margin-top:6px" data-act="add-new">Add an activity</button><div class="row" style="margin-top:10px"><button class="btn" style="flex:1" data-act="season" data-back="home">Season</button><button class="btn" style="flex:1" data-act="records" data-back="home">Records</button><button class="btn" style="flex:1" data-act="backup">Backup</button></div>';
   h+='<p class="note">Your counts are saved on this phone, in this browser. Use Backup now and then so nothing is lost.</p>';
   app.innerHTML=h;
 }
@@ -621,6 +649,17 @@ function renderCardio(sk){
   h+='<div class="card" style="margin-top:12px"><div class="name" style="font-size:18px;font-weight:800">Recent sessions</div>';
   h+=recent.length?recent.map(function(x){return sessionRow(sk,x,true);}).join(""):'<div class="note">No sessions yet.</div>';
   h+='</div><button class="btn wide" data-act="past">See all days in the calendar</button>';
+  app.innerHTML=h;
+}
+
+/* ---------- edit a session ---------- */
+function renderEditSess(){
+  var sk=byId(view.skill), x=sk?(sk.sessions||[]).filter(function(y){return y.id===view.sid;})[0]:null;
+  if(!x) return go(view.ret||{name:"home"});
+  var t=splitTime(x.t*60);
+  var pre={d:x.d,h:t.h,m:t.m,s:x.t>0?t.s:"",note:x.note||"",effort:x.effort||0};
+  var h='<div class="top"><button class="icon" data-act="scancel" aria-label="Back">←</button><h1>Edit '+esc(sk.name)+'</h1></div>';
+  h+='<div class="card">'+sessionForm(sk,x.date,true,pre,x.id)+'</div>';
   app.innerHTML=h;
 }
 
@@ -773,9 +812,9 @@ function renderCal(){
   for(d=1;d<=n;d++){
     var key=ymd(y,m,d), val=vals[key], lvl=0;
     if(val>0&&denom>0){ var r=val/denom; lvl=r>0.75?5:r>0.5?4:r>0.25?3:r>0.1?2:1; }
-    var op=[0,0.16,0.32,0.5,0.72,0.95][lvl], future=key>tk;
+    var op=[0,0.16,0.32,0.5,0.72,0.95][lvl], future=key>tk, hasEv=S.events.some(function(e){return e.date===key;});
     var label=single?fmt(val)+suf:val+(val===1?" activity":" activities");
-    h+='<button class="cell'+(lvl>=3?' hi':'')+(lvl>=5?' hi2':'')+(key===tk?' today':'')+'" data-act="day" data-date="'+key+'"'+(future?' disabled':'')+' aria-label="'+longDay(key)+': '+label+'">'
+    h+='<button class="cell'+(lvl>=3?' hi':'')+(lvl>=5?' hi2':'')+(key===tk?' today':'')+(hasEv?' ev':'')+'" data-act="day" data-date="'+key+'"'+(future?' disabled':'')+' aria-label="'+longDay(key)+': '+label+'">'
       +'<span class="heat" style="--h:'+op+'"></span><span class="d">'+d+'</span><span class="n">'+(val>0?(single?fmtShort(val):dots(val)):'')+'</span></button>';
   }
   h+='</div>';
@@ -814,6 +853,10 @@ function renderDay(){
     }
     h+='</div>';
   });
+  var de=S.events.filter(function(e){return e.date===date;});
+  h+='<div class="card"><div class="head"><span class="name">Events</span></div>'
+    +(de.length?de.map(function(e){return '<div class="srow"><div><b>'+esc(e.title)+'</b><div class="note" style="margin:2px 0 0">'+(fmtClock(e.time)?fmtClock(e.time)+' · ':'')+esc(whoText(e))+'</div></div><button class="linkbtn" data-act="evedit" data-id="'+esc(e.id)+'">Edit</button></div>';}).join(""):'<div class="note">No events on this day.</div>')
+    +'<div style="margin-top:10px"><button class="btn wide" data-act="evadd" data-date="'+date+'">Add an event on this day</button></div></div>';
   var dg=S.games.filter(function(g){return g.date===date;});
   h+='<div class="card"><div class="head"><span class="name">Games</span></div>'
     +(dg.length?dg.map(function(g){return '<button class="srow" style="width:100%;text-align:left" data-act="gview" data-id="'+esc(g.id)+'"><div><b>'+esc(gameTitle(g))+'</b><div class="note" style="margin:2px 0 0">'+(resultLabel(g)?resultLabel(g)+' · ':'')+esc(scoreText(g)||keyLine(g))+'</div></div><span>›</span></button>';}).join(""):'<div class="note">No games on this day.</div>')
@@ -841,7 +884,7 @@ function summaryTiles(skills,games){
     +tile(activeDaysLast(set,7),'active days, last 7')+tile(fmt(repsTotal(skills)),'reps logged')+tile(fmt(Math.round(km*10)/10)+' km','distance logged')+'</div>';
 }
 function renderStats(){
-  var h='<h1>Stats</h1><p class="sub">How the training is going.</p>'+summaryTiles(S.skills,S.games)+badgeRow({me:true,skills:S.skills,games:S.games},"stats")+'<button class="btn wide" style="margin-top:10px" data-act="season" data-back="stats">Season summary</button>';
+  var h='<h1>Stats</h1><p class="sub">How the training is going.</p>'+summaryTiles(S.skills,S.games)+badgeRow({me:true,skills:S.skills,games:S.games},"stats")+'<div class="row" style="margin-top:10px"><button class="btn" style="flex:1" data-act="season" data-back="stats">Season summary</button><button class="btn" style="flex:1" data-act="records" data-back="stats">Records</button></div>';
   if(S.skills.length){
     if(!byId(statFilter)) statFilter=S.skills[0].id;
     h+='<h2>Daily activity</h2>'+filterPills(statFilter,"statf",false);
@@ -887,7 +930,8 @@ function skillCard(sk){
       +'<div><b>'+(best?paceStr(sk,best.d,best.t):'–')+'</b><span>best pace</span></div>'
       +'<div><b>'+fmt(longest)+suf+'</b><span>longest session</span></div>'
       +'<div><b>'+days.length+'</b><span>active days</span></div>'
-      +'<div><b>'+fmt(Math.round(sumDays(sk,7)*100)/100)+suf+'</b><span>last 7 days</span></div></div>';
+      +'<div><b>'+fmt(Math.round(sumDays(sk,7)*100)/100)+suf+'</b><span>last 7 days</span></div>'
+      +(function(){var e=(sk.sessions||[]).filter(function(x){return x.effort>0;}); return e.length?'<div><b>'+(e.reduce(function(a,x){return a+x.effort;},0)/e.length).toFixed(1)+'/5</b><span>average effort</span></div>':'';})()+'</div>';
   } else {
     var acc=accuracy(sk), tot=allTotal(sk);
     h+='<div class="kv">'
@@ -957,7 +1001,7 @@ function cleanSkills(arr){
         if(!x||!validDate(x.date)) return;
         var d=parseFloat(x.d), t=parseFloat(x.t);
         if(!(d>0)||!isFinite(d)||d>100000) return;
-        out.sessions.push({id:String(x.id||uid()).slice(0,20),date:x.date,d:round3(d),t:isFinite(t)&&t>0&&t<100000?round3(t):0});
+        out.sessions.push({id:String(x.id||uid()).slice(0,20),date:x.date,d:round3(d),t:isFinite(t)&&t>0&&t<100000?round3(t):0,note:String(x.note||"").slice(0,60),effort:(function(e){return e>=1&&e<=5?e:0;})(parseInt(x.effort,10))});
       });
     } else {
       (Array.isArray(sk.sides)?sk.sides:[]).slice(0,MAX_OPTS).forEach(function(s){
@@ -1104,7 +1148,7 @@ function cleanGames(arr){
     if(sport==="Athletics"&&ATH_IDS.indexOf(src.event)>=0) st.event=src.event;
     var t=parseInt(g.team,10), o2=parseInt(g.other,10);
     out.push({id:String(g.id||uid()).replace(/[^A-Za-z0-9]/g,"").slice(0,20)||uid(),sport:sport,date:g.date,opp:String(g.opp||"").slice(0,40),notes:String(g.notes||"").slice(0,200),
-      result:["win","loss","draw","nr"].indexOf(g.result)>=0?g.result:"",team:isFinite(t)&&t>=0&&t<=100000?t:null,other:isFinite(o2)&&o2>=0&&o2<=100000?o2:null,stats:st});
+      result:["win","loss","draw","nr"].indexOf(g.result)>=0?g.result:"",team:isFinite(t)&&t>=0&&t<=100000?t:null,other:isFinite(o2)&&o2>=0&&o2<=100000?o2:null,stats:st,effort:(function(e){return e>=1&&e<=5?e:0;})(parseInt(g.effort,10))});
   });
   return out;
 }
@@ -1144,6 +1188,7 @@ function gameRows(games){
     if(g.team!=null) r("Team score",g.team);
     if(g.other!=null) r("Opponent score",g.other);
     if(g.result) r("Result: "+resultLabel(g),1);
+    if(g.effort) r("Effort",g.effort);
     Object.keys(s).forEach(function(k){
       if(k==="howOut"){ var h=HOWOUT.filter(function(x){return x[0]===s.howOut;})[0]; if(h) r("Out: "+h[1],1); }
       else if(k==="event"){ var e=athEv(s.event); if(e) r("Event: "+e[1],1); }
@@ -1270,7 +1315,7 @@ function newGameForm(date){
   return {id:null,sport:S.gsport&&GAME_SPORTS[S.gsport]?S.gsport:"Cricket",result:"",howOut:"dnb",v:{date:date||today(),opp:"",notes:""}};
 }
 function gameToForm(g){
-  var v={date:g.date,opp:g.opp,notes:g.notes,team:g.team==null?"":String(g.team),other:g.other==null?"":String(g.other)}, s=g.stats||{};
+  var v={date:g.date,opp:g.opp,notes:g.notes,effort:g.effort?String(g.effort):"",team:g.team==null?"":String(g.team),other:g.other==null?"":String(g.other)}, s=g.stats||{};
   var evType=(athEv(s.event)||[])[2];
   Object.keys(s).forEach(function(k){
     if(k==="howOut") return;
@@ -1334,6 +1379,7 @@ function renderAddGame(){
     if(gr.bat) h+='<label>How were you out?</label>'+pills(HOWOUT,f.howOut,"ghow");
     h+='</div>';
   });
+  h+='<label>How hard was it? (optional)</label>'+effortSelect(f.v.effort,'data-k="effort"');
   h+='<label for="gf_notes">Notes (optional)</label><input type="text" id="gf_notes" data-k="notes" maxlength="200" value="'+esc(f.v.notes)+'" placeholder="e.g. Cup semi-final">';
   h+='<div style="margin-top:16px"><button class="btn primary wide" data-act="gsave">Save</button></div>';
   app.innerHTML=h;
@@ -1346,7 +1392,7 @@ function saveGame(){
   var f=view.mf, v=f.v, cr=f.sport==="Cricket", mode=gmode(f.sport), date=v.date||today();
   if(!validDate(date)||date>today()){toast("Choose a date up to today");return;}
   var g={id:f.id||uid(),sport:f.sport,date:date,opp:String(v.opp||"").trim().slice(0,40),notes:String(v.notes||"").trim().slice(0,200),
-    result:mode==="match"?(f.result||""):"",team:mode==="match"?numOrNull(v.team):null,other:mode==="match"?numOrNull(v.other):null,stats:{}};
+    result:mode==="match"?(f.result||""):"",team:mode==="match"?numOrNull(v.team):null,other:mode==="match"?numOrNull(v.other):null,stats:{},effort:Math.min(5,Math.max(0,parseInt(v.effort,10)||0))};
   var keys=gameFields(f.sport).map(function(x){return [x[0],x[2]||"int"];}).concat(gameExtraKeys(f.sport)), bad=null;
   keys.forEach(function(kt){
     var k=kt[0], ty=kt[1];
@@ -1383,6 +1429,7 @@ function renderGameDetail(){
   h+='<div class="card"><div class="head"><span class="name">'+head+'</span>'+resultPill(g,pbs)+'</div><div class="note" style="margin:0">'+longDay(g.date)+'</div>'
     +(g.sport==="Rugby"&&(s.tTries!=null||s.oTries!=null)?'<div class="note" style="margin:6px 0 0">Tries: '+(s.tTries==null?"–":s.tTries)+' v '+(s.oTries==null?"–":s.oTries)+'</div>':'')
     +(cr&&(s.tO!=null||s.oO!=null)?'<div class="note" style="margin:6px 0 0">Overs: '+(s.tO==null?"–":s.tO.toFixed(1))+' v '+(s.oO==null?"–":s.oO.toFixed(1))+'</div>':'')
+    +(g.effort?'<div class="note" style="margin:6px 0 0">Effort: '+g.effort+'/5 ('+EFFORT[g.effort]+')</div>':'')
     +(g.notes?'<div style="margin-top:8px">'+esc(g.notes)+'</div>':'')+'</div>';
   GAME_SPORTS[g.sport].groups.forEach(function(gr){
     var items=[];
@@ -1511,7 +1558,7 @@ function renderSeason(){
       d.skills.forEach(function(sk){
         var tot=allTotal(sk); if(!(tot>0)) return;
         var line;
-        if(isCardio(sk)){ var ss=sk.sessions||[], mins=total(sk,"t"); line=ss.length+(ss.length===1?" session":" sessions")+" · "+fmt(round2(tot))+" "+sk.unit+(mins>0?" · "+fmtDur(mins)+" · "+paceStr(sk,tot,mins)+" average":""); }
+        if(isCardio(sk)){ var ss=sk.sessions||[], mins=total(sk,"t"); line=ss.length+(ss.length===1?" session":" sessions")+" · "+fmt(round2(tot))+" "+sk.unit+(mins>0?" · "+fmtDur(mins)+" · "+paceStr(sk,tot,mins)+" average":"")+(function(){var e=ss.filter(function(x){return x.effort>0;}); return e.length?" · effort "+(e.reduce(function(a,x){return a+x.effort;},0)/e.length).toFixed(1)+"/5":"";})(); }
         else line=sk.sides.map(function(sd){return sd.label+" "+fmt(total(sk,sd.id));}).join(" · ")+" · best day "+fmt(bestDay(sk).n);
         acts+='<div class="card"><div class="head"><span class="name" style="font-size:17px">'+esc(sk.name)+'</span><span class="sport">'+esc(sk.sport)+'</span></div><div>'+esc(line)+'</div></div>';
       });
@@ -1524,6 +1571,212 @@ function renderSeason(){
         h+='<h2>'+esc(sp)+'</h2><div class="tiles">'+t.map(function(x){return tile(esc(x[0]),esc(x[1]));}).join("")+'</div>';
       });
     }
+  }
+  app.innerHTML=h;
+}
+
+/* ---------- events ---------- */
+var evDelArmed=null;
+function cleanEvents(arr){
+  var out=[];
+  (Array.isArray(arr)?arr:[]).slice(0,200).forEach(function(e){
+    if(!e||typeof e!=="object"||!validDate(e.date)) return;
+    var title=String(e.title||"").trim().slice(0,60); if(!title) return;
+    var who=String(e.who||"all"); if(who!=="all"&&!/^[A-Za-z0-9]{3,20}$/.test(who)) who="all";
+    out.push({id:String(e.id||uid()).replace(/[^A-Za-z0-9]/g,"").slice(0,20)||uid(),title:title,date:e.date,time:/^\d{2}:\d{2}$/.test(String(e.time||""))?e.time:"",
+      who:who,sport:GAME_SPORTS[e.sport]?e.sport:"",notes:String(e.notes||"").slice(0,120)});
+  });
+  return out;
+}
+function daysUntil(date){return Math.round((parseKey(date)-parseKey(today()))/86400000);}
+function untilText(n){return n===0?"Today":(n===1?"Tomorrow":(n>1?"in "+n+" days":(n===-1?"Yesterday":Math.abs(n)+" days ago")));}
+function fmtClock(t){
+  if(!/^\d{2}:\d{2}$/.test(String(t||""))) return "";
+  var h=parseInt(t.slice(0,2),10); return ((h%12)||12)+":"+t.slice(3)+" "+(h<12?"am":"pm");
+}
+function peopleList(){
+  var out=[{id:S.me.id,name:shareName()||"Me"}];
+  Object.keys(S.players).forEach(function(id){out.push({id:id,name:S.players[id].name});});
+  return out;
+}
+function whoText(e){
+  if(e.who==="all") return "Everyone";
+  var p=peopleList().filter(function(x){return x.id===e.who;})[0];
+  return p?p.name:"Someone";
+}
+function cmpEv(a,b){return a.date<b.date?-1:(a.date>b.date?1:((a.time||"")<(b.time||"")?-1:1));}
+function upcomingEvents(){return S.events.filter(function(e){return e.date>=today();}).sort(cmpEv);}
+function evRow(e){
+  var n=daysUntil(e.date), clock=fmtClock(e.time);
+  return '<div class="srow"><div><b>'+esc(e.title)+'</b><div class="note" style="margin:2px 0 0">'+midDay(e.date)+(clock?' · '+clock:'')+' · '+esc(whoText(e))+'</div></div>'
+    +'<span class="rp'+(n<=3?' soon':'')+'">'+untilText(n)+'</span></div>';
+}
+function eventCard(e,past){
+  var n=daysUntil(e.date), clock=fmtClock(e.time);
+  return '<div class="card"><div class="head"><span class="name" style="font-size:17px">'+esc(e.title)+'</span><span class="rp'+(!past&&n<=3?' soon':'')+'">'+untilText(n)+'</span></div>'
+    +'<div class="note" style="margin:0">'+longDay(e.date)+(clock?' · '+clock:'')+' · '+esc(whoText(e))+(e.sport?' · '+esc(e.sport):'')+'</div>'
+    +(e.notes?'<div style="margin-top:6px">'+esc(e.notes)+'</div>':'')
+    +'<div class="row" style="margin-top:8px;gap:4px">'+(past&&e.sport?'<button class="btn" data-act="evlog" data-id="'+esc(e.id)+'">Log the result</button>':'')
+    +'<button class="linkbtn" data-act="evedit" data-id="'+esc(e.id)+'">Edit</button><button class="linkbtn" data-act="evdel" data-id="'+esc(e.id)+'">Delete</button></div></div>';
+}
+function renderEvents(){
+  var up=upcomingEvents(), past=S.events.filter(function(e){return e.date<today();}).sort(function(a,b){return cmpEv(b,a);}).slice(0,8);
+  var h='<div class="top"><button class="icon" data-act="home" aria-label="Back">←</button><h1>Events</h1></div>';
+  h+='<button class="btn primary wide" data-act="evadd" data-date="'+today()+'">Add an event</button>';
+  h+='<h2>Coming up</h2>'+(up.length?up.map(function(e){return eventCard(e,false);}).join(""):'<div class="empty">Nothing scheduled yet.</div>');
+  if(past.length) h+='<h2>Recent</h2>'+past.map(function(e){return eventCard(e,true);}).join("");
+  app.innerHTML=h;
+}
+function newEventForm(date){return {id:null,who:"all",sport:"",v:{title:"",date:date||today(),time:"",notes:""}};}
+function eventToForm(e){return {id:e.id,who:e.who||"all",sport:e.sport||"",v:{title:e.title,date:e.date,time:e.time||"",notes:e.notes||""}};}
+function readEventForm(){
+  var f=view.ef; if(!f) return;
+  Array.prototype.forEach.call(app.querySelectorAll("[data-e]"),function(el){f.v[el.dataset.e]=el.value;});
+}
+function renderAddEvent(){
+  var f=view.ef;
+  var h='<div class="top"><button class="icon" data-act="events" aria-label="Back">←</button><h1>'+(f.id?"Edit event":"Add an event")+'</h1></div>';
+  h+='<label for="ev_title">What is it?</label><input type="text" id="ev_title" data-e="title" maxlength="60" value="'+esc(f.v.title)+'" placeholder="e.g. Cricket vs Kamo">';
+  h+='<label for="ev_date">Date</label><input type="date" id="ev_date" data-e="date" value="'+esc(f.v.date)+'">';
+  h+='<label for="ev_time">Time (optional)</label><input type="time" id="ev_time" data-e="time" value="'+esc(f.v.time)+'">';
+  h+='<label>Who</label>'+pills([["all","Everyone"]].concat(peopleList().map(function(p){return [p.id,p.name];})),f.who,"ewho");
+  h+='<label>Sport (optional)</label>'+pills([["","None"]].concat(Object.keys(GAME_SPORTS).map(function(k){return [k,k];})),f.sport,"esport");
+  h+='<label for="ev_notes">Notes (optional)</label><input type="text" id="ev_notes" data-e="notes" maxlength="120" value="'+esc(f.v.notes)+'" placeholder="e.g. Meet at 8am, bring water">';
+  h+='<p class="note">Setting a sport lets you log the result in one tap after the day.</p>';
+  h+='<div style="margin-top:14px"><button class="btn primary wide" data-act="evsave">Save event</button></div>';
+  app.innerHTML=h;
+}
+function saveEvent(){
+  var f=view.ef, v=f.v, title=String(v.title||"").trim().slice(0,60);
+  if(!title){toast("Give the event a name");return;}
+  if(!validDate(v.date)){toast("Choose a date");return;}
+  var e={id:f.id||uid(),title:title,date:v.date,time:/^\d{2}:\d{2}$/.test(v.time||"")?v.time:"",who:f.who||"all",sport:GAME_SPORTS[f.sport]?f.sport:"",notes:String(v.notes||"").trim().slice(0,120)};
+  var i=-1; S.events.forEach(function(x,idx){if(x.id===e.id) i=idx;});
+  if(i>=0) S.events[i]=e; else S.events.push(e);
+  persist(); pushGoals(); go({name:"events"}); toast("Event saved");
+}
+
+/* ---------- records ---------- */
+var recordsWho="";
+function weekStart(d){var dt=parseKey(d);return addDays(d,-((dt.getDay()+6)%7));}
+function streakInfo(set){
+  var keys=Object.keys(set).sort(), best=0, run=0, prev=null, end=null;
+  keys.forEach(function(k){ run=(prev&&addDays(prev,1)===k)?run+1:1; if(run>best){best=run;end=k;} prev=k; });
+  return {n:best,end:end};
+}
+function bestGame(gs,fn,high){
+  var b=null;
+  gs.forEach(function(g){ var v=fn(g); if(v===null||v===undefined) return; if(!b||(high?v>b.v:v<b.v)) b={g:g,v:v}; });
+  return b;
+}
+var RECORD_STATS={
+  "Touch":[["tries","Most tries in a game"],["assists","Most assists in a game"]],
+  "Football":[["goals","Most goals in a game"],["assists","Most assists in a game"]],
+  "Hockey":[["goals","Most goals in a game"],["assists","Most assists in a game"]],
+  "Netball":[["goals","Most goals in a game"]],
+  "Basketball":[["pts","Most points in a game"],["reb","Most rebounds in a game"],["ast","Most assists in a game"]]
+};
+function recordsFor(p){
+  var recs=[];
+  function add(id,cat,label,val,text,date,high){recs.push({id:id,cat:cat,label:label,val:val,text:text,date:date,high:high});}
+  var st=streakInfo(activeSet(p.skills,p.games)); if(st.n>1) add("streak","Overall","Longest streak",st.n,st.n+" days",st.end,true);
+  p.skills.forEach(function(sk){
+    var key=skKey(sk), cat=sk.name, wk={};
+    if(isCardio(sk)){
+      var sess=sk.sessions||[]; if(!sess.length) return;
+      var lg=null; sess.forEach(function(x){ if(!lg||toKm(sk,x.d)>toKm(sk,lg.d)) lg=x; });
+      add(key+":long",cat,"Longest session",toKm(sk,lg.d),fmt(lg.d)+" "+sk.unit,lg.date,true);
+      var pt=sk.pace||"perkm", thr=pt==="kmh"?[10,25]:(pt==="per100m"?[0.4,1]:[1,5,10]);
+      thr.forEach(function(t){
+        var best=null; sess.forEach(function(x){ if(x.t>0&&toKm(sk,x.d)>=t){ var sp=speed(sk,x); if(!best||sp>best.sp) best={x:x,sp:sp}; } });
+        if(!best) return;
+        var val=pt==="kmh"?best.sp:(pt==="per100m"?best.x.t/(toKm(sk,best.x.d)*10):best.x.t/toKm(sk,best.x.d));
+        add(key+":pace"+t,cat,"Fastest pace, "+(t<1?(t*1000)+" m":t+" km")+" or more",val,paceStr(sk,best.x.d,best.x.t)+" ("+fmt(best.x.d)+" "+sk.unit+")",best.x.date,pt==="kmh");
+      });
+      Object.keys(sk.log).forEach(function(d){var v=sk.log[d].d||0; if(v>0){var w=weekStart(d); wk[w]=(wk[w]||0)+v;}});
+      var bw=null; Object.keys(wk).forEach(function(w){ if(!bw||wk[w]>bw.v) bw={w:w,v:wk[w]}; });
+      if(bw) add(key+":week",cat,"Biggest week",toKm(sk,bw.v),fmt(round2(bw.v))+" "+sk.unit,bw.w,true);
+    } else {
+      var acc=accuracy(sk)!==null, use=acc?sk.sides.filter(function(s){return /^(made|caught)$/i.test(s.label);}):sk.sides;
+      if(!use.length) return;
+      var bd=null;
+      Object.keys(sk.log).forEach(function(d){
+        var v=use.reduce(function(a,s){return a+dayVal(sk,d,s.id);},0);
+        if(v>0){ if(!bd||v>bd.v) bd={d:d,v:v}; var w=weekStart(d); wk[w]=(wk[w]||0)+v; }
+      });
+      var word=acc?use[0].label.toLowerCase():"";
+      if(bd) add(key+":day",cat,acc?"Most "+word+" in a day":"Best day",bd.v,fmt(bd.v),bd.d,true);
+      var bw2=null; Object.keys(wk).forEach(function(w){ if(!bw2||wk[w]>bw2.v) bw2={w:w,v:wk[w]}; });
+      if(bw2) add(key+":week",cat,acc?"Most "+word+" in a week":"Best week",bw2.v,fmt(bw2.v),bw2.w,true);
+    }
+  });
+  var by={}; (p.games||[]).forEach(function(g){(by[g.sport]=by[g.sport]||[]).push(g);});
+  Object.keys(by).forEach(function(sp){
+    var gs=by[sp], b;
+    function stat(k){return function(g){var v=(g.stats||{})[k]; return v>0?v:null;};}
+    if(sp==="Cricket"){
+      b=bestGame(gs,function(g){var s=g.stats||{}; return (s.howOut&&s.howOut!=="dnb")?(s.runs||0):null;},true);
+      if(b&&b.v>0) add("Cricket:hs","Cricket","Highest score",b.v,b.v+(b.g.stats.howOut==="notout"?"*":""),b.g.date,true);
+      b=bestGame(gs,function(g){var s=g.stats||{}; return s.overs>0?(s.wkts||0)*1000-(s.conc||0):null;},true);
+      if(b) add("Cricket:bb","Cricket","Best bowling",b.v,(b.g.stats.wkts||0)+"/"+(b.g.stats.conc||0),b.g.date,true);
+      b=bestGame(gs,stat("sixes"),true); if(b) add("Cricket:six","Cricket","Most sixes in an innings",b.v,String(b.v),b.g.date,true);
+      b=bestGame(gs,stat("catches"),true); if(b) add("Cricket:catch","Cricket","Most catches in a game",b.v,String(b.v),b.g.date,true);
+    } else if(sp==="Rugby"){
+      b=bestGame(gs,stat("tries"),true); if(b) add("Rugby:tries","Rugby","Most tries in a game",b.v,String(b.v),b.g.date,true);
+      b=bestGame(gs,stat("tackles"),true); if(b) add("Rugby:tackles","Rugby","Most tackles in a game",b.v,String(b.v),b.g.date,true);
+      b=bestGame(gs,function(g){var s=g.stats||{}; var v=(s.tries||0)*5+(s.conv||0)*2+(s.pens||0)*3+(s.drops||0)*3; return v>0?v:null;},true);
+      if(b) add("Rugby:pts","Rugby","Most points in a game",b.v,String(b.v),b.g.date,true);
+    } else if(sp==="Cross country"){
+      b=bestGame(gs,stat("place"),false); if(b) add("XC:place","Cross country","Best place",b.v,ord(b.v)+(b.g.stats.runners>0?" of "+b.g.stats.runners:""),b.g.date,false);
+      b=bestGame(gs,stat("dist"),true); if(b) add("XC:long","Cross country","Longest race",b.v,fmt(b.v)+" km",b.g.date,true);
+    } else if(sp==="Athletics"){
+      ATH_EVENTS.forEach(function(e){
+        var time=e[2]==="time", eb=bestGame(gs,function(g){var s=g.stats||{}; return (s.event===e[0]&&s.mark>0)?s.mark:null;},!time);
+        if(eb) add("ATH:"+e[0],"Athletics","Best "+e[1],eb.v,fmtMarkVal(e,eb.v),eb.g.date,!time);
+      });
+    } else if(RECORD_STATS[sp]){
+      RECORD_STATS[sp].forEach(function(rs){ var rb=bestGame(gs,stat(rs[0]),true); if(rb) add(sp+":"+rs[0],sp,rs[1],rb.v,String(rb.v),rb.g.date,true); });
+    }
+  });
+  return recs;
+}
+function familyRecords(players){
+  var best={}, order=[];
+  players.forEach(function(p,i){
+    recordsFor(p).forEach(function(r){
+      var cur=best[r.id];
+      if(!cur){order.push(r.id); best[r.id]={r:r,i:i};}
+      else if(r.high?r.val>cur.r.val:r.val<cur.r.val) best[r.id]={r:r,i:i};
+    });
+  });
+  return {order:order,best:best};
+}
+function recRow(r,holder,tag){
+  return '<div class="srow"><div><b>'+esc(r.label)+'</b><div class="note" style="margin:2px 0 0">'
+    +(r.id.indexOf(":week")>0?'week of ':'')+shortDay(r.date)
+    +(holder?' · <i class="dot" style="background:'+PLAYER_COLORS[holder.i%6]+'"></i>'+esc(holder.name):'')
+    +(tag?' · <span class="rp win">Family record</span>':'')+'</div></div><b>'+esc(r.text)+'</b></div>';
+}
+function renderRecords(){
+  var players=allPlayers();
+  if(!players.length) players=[{id:S.me.id,name:shareName()||"You",skills:S.skills,games:S.games,me:true}];
+  var opts=[]; if(players.length>=2) opts.push(["family","Family"]);
+  players.forEach(function(p){opts.push([p.id,p.name]);});
+  if(!opts.some(function(o){return o[0]===recordsWho;})) recordsWho=opts[0][0];
+  var h='<div class="top"><button class="icon" data-act="tab" data-tab="'+(view.back||"stats")+'" aria-label="Back">←</button><h1>Records</h1></div>';
+  if(opts.length>1) h+='<div style="margin-bottom:12px">'+pills(opts,recordsWho,"rwho")+'</div>';
+  var list=[], fam=players.length>=2?familyRecords(players):null;
+  if(recordsWho==="family"){
+    fam.order.forEach(function(id){var b=fam.best[id]; list.push({r:b.r,holder:{i:b.i,name:players[b.i].name},tag:false});});
+  } else {
+    var idx=0; players.forEach(function(p,n){if(p.id===recordsWho) idx=n;});
+    recordsFor(players[idx]).forEach(function(r){ list.push({r:r,holder:null,tag:!!fam&&fam.best[r.id].i===idx}); });
+  }
+  if(!list.length){ h+='<div class="empty">No records yet. Log some activities and results and they will show up here.</div>'; }
+  else {
+    var cats=[], groups={};
+    list.forEach(function(x){ if(!groups[x.r.cat]){groups[x.r.cat]=[];cats.push(x.r.cat);} groups[x.r.cat].push(x); });
+    cats.forEach(function(c){ h+='<h2>'+esc(c)+'</h2><div class="card">'+groups[c].map(function(x){return recRow(x.r,x.holder,x.tag);}).join("")+'</div>'; });
   }
   app.innerHTML=h;
 }
@@ -1713,7 +1966,7 @@ function readGoalForm(){
 function pushGoals(){
   S.goalsDirty=true; persist();
   if(!syncOn()) return Promise.resolve();
-  return rawCall(S.sync.url,S.sync.code,"push",{id:"familygoals",name:"Family goals",data:JSON.stringify({skills:[],goals:S.goals,family:S.familyName||""}),rows:[]})
+  return rawCall(S.sync.url,S.sync.code,"push",{id:"familygoals",name:"Family goals",data:JSON.stringify({skills:[],goals:S.goals,family:S.familyName||"",events:S.events}),rows:[]})
     .then(function(res){ if(!res.ok) throw new Error(res.error||"failed"); S.goalsDirty=false; persist(); })
     .catch(function(e){ sync.err=friendlyErr(e); });
 }
@@ -1907,10 +2160,10 @@ function syncFlush(keep){
 }
 function applyFamily(list){
   sync.raw=list;
-  var before=JSON.stringify([S.players,S.goals,S.familyName]), seen={};
+  var before=JSON.stringify([S.players,S.goals,S.familyName,S.events]), seen={};
   list.forEach(function(p){
     if(p&&p.id==="familygoals"){
-      if(!S.goalsDirty){ try{var go=JSON.parse(p.data); if(go&&Array.isArray(go.goals)) S.goals=cleanGoals(go.goals); if(go&&typeof go.family==="string") S.familyName=go.family.slice(0,30);}catch(e){} }
+      if(!S.goalsDirty){ try{var go=JSON.parse(p.data); if(go&&Array.isArray(go.goals)) S.goals=cleanGoals(go.goals); if(go&&typeof go.family==="string") S.familyName=go.family.slice(0,30); if(go&&Array.isArray(go.events)) S.events=cleanEvents(go.events);}catch(e){} }
       return;
     }
     if(!p||!/^[A-Za-z0-9]{3,20}$/.test(String(p.id))||p.id===S.me.id) return;
@@ -1920,7 +2173,7 @@ function applyFamily(list){
     S.players[p.id]={id:p.id,name:String(p.name||"Player").slice(0,30),skills:cleanSkills(obj.skills),games:cleanGames(obj.games),at:p.at||0,via:"sync"};
   });
   Object.keys(S.players).forEach(function(id){ if(S.players[id].via==="sync"&&!seen[id]) delete S.players[id]; });
-  return before!==JSON.stringify([S.players,S.goals,S.familyName]);
+  return before!==JSON.stringify([S.players,S.goals,S.familyName,S.events]);
 }
 function syncPull(force){
   if(!syncOn()) return Promise.resolve();
@@ -2021,6 +2274,7 @@ document.addEventListener("click",function(e){
   if(view.name==="add") readForm();
   if(view.name==="addgoal") readGoalForm();
   if(view.name==="addgame") readGameForm();
+  if(view.name==="addevent") readEventForm();
   switch(act){
     case "tab":
       if(el.dataset.tab==="home") go({name:"home"});
@@ -2137,6 +2391,23 @@ document.addEventListener("click",function(e){
       S.familyName=String(document.getElementById("fnName").value||"").trim().slice(0,30);
       persist(); pushGoals(); go({name:"home"}); toast("Saved");
       break;
+    case "events": go({name:"events"}); break;
+    case "evadd": go({name:"addevent",ef:newEventForm(el.dataset.date)}); break;
+    case "evedit": go({name:"addevent",ef:eventToForm(S.events.filter(function(x){return x.id===el.dataset.id;})[0])}); break;
+    case "ewho": view.ef.who=el.dataset.v; renderAddEvent(); break;
+    case "esport": view.ef.sport=el.dataset.v; renderAddEvent(); break;
+    case "evsave": saveEvent(); break;
+    case "evdel":
+      if(evDelArmed!==el.dataset.id){ evDelArmed=el.dataset.id; el.textContent="Tap again to delete"; var eid=el.dataset.id; setTimeout(function(){evDelArmed=null;var b=document.querySelector('[data-act="evdel"][data-id="'+eid+'"]');if(b)b.textContent="Delete";},4000); }
+      else { S.events=S.events.filter(function(x){return x.id!==el.dataset.id;}); evDelArmed=null; persist(); pushGoals(); renderEvents(); toast("Event deleted"); }
+      break;
+    case "evlog":
+      var ev=S.events.filter(function(x){return x.id===el.dataset.id;})[0];
+      var gf=newGameForm(ev.date); if(GAME_SPORTS[ev.sport]) gf.sport=ev.sport; gf.v.opp=ev.title;
+      go({name:"addgame",mf:gf});
+      break;
+    case "records": go({name:"records",back:el.dataset.back||"stats"}); break;
+    case "rwho": recordsWho=el.dataset.v; renderRecords(); break;
     case "chalm": chalMetric=el.dataset.v; renderTeam(); break;
     case "chalp": chalPeriod=el.dataset.v; renderTeam(); break;
     case "teamf": teamFilter=el.dataset.v; renderTeam(); break;
@@ -2218,12 +2489,23 @@ document.addEventListener("click",function(e){
       if(!(r.dist>0)){toast("Add the distance");break;}
       if(!validDate(r.date)||r.date>today()){toast("Choose a date up to today");break;}
       var beforeP=progress(sk,"d");
-      addSession(sk,r.date,r.dist,r.mins);
+      addSession(sk,r.date,r.dist,r.mins,r.note,r.effort);
       var afterP=progress(sk,"d"), tg=sk.sides[0].target;
       if(tg>0&&beforeP<tg&&afterP>=tg){ toast("Goal reached: "+fmt(tg)+" "+sk.unit+periodLabel(sk.period)+"!"); buzz([60,40,60,40,120]); }
       else { toast("Saved "+fmt(r.dist)+" "+sk.unit+(r.mins>0?" · "+paceStr(sk,r.dist,r.mins):"")); buzz([30,30,30]); }
       if(view.name==="day") view.open=null;
       render(); break;
+    case "sedit": go({name:"editsess",skill:el.dataset.skill,sid:el.dataset.id,ret:view}); break;
+    case "scancel": go(view.ret||{name:"skill",id:view.skill}); break;
+    case "savesess":
+      var sbox=el.closest(".sform"); sk=byId(sbox.dataset.skill);
+      var sr=readSession(sbox);
+      if(!(sr.dist>0)){toast("Add the distance");break;}
+      if(!validDate(sr.date)||sr.date>today()){toast("Choose a date up to today");break;}
+      updateSession(sk,sbox.dataset.sid,sr.date,sr.dist,sr.mins,sr.note,sr.effort);
+      var back=view.ret||{name:"skill",id:sk.id};
+      go(back); toast("Session updated");
+      break;
     case "dsess":
       if(sessArmed!==el.dataset.id){
         sessArmed=el.dataset.id; el.textContent="Tap again";
