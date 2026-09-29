@@ -229,7 +229,7 @@ function pr(n,sides,o){
 }
 function cardio(n,unit,pace,target){return pr(n,[{l:"Distance"}],{kind:"cardio",unit:unit,pace:pace,period:"month",target:target});}
 var SPORTS={
-  "Rugby":[pr("Pass",[{l:"Left"},{l:"Right"}]),pr("Drop kick",FEET),pr("Box kick",FEET),pr("Goal kick",MM),pr("Grubber",FEET),pr("Line-out throw",one("Throws")),pr("Tackle",[{l:"Left shoulder"},{l:"Right shoulder"}])],
+  "Rugby":[pr("Pass",[{l:"Left"},{l:"Right"}]),pr("Drop kick",FEET),pr("Box kick",FEET),pr("Goal kick",MM),pr("Grubber",FEET),pr("Drop punt",FEET),pr("Spiral punt",FEET),pr("Line-out throw",one("Throws")),pr("Tackle",[{l:"Left shoulder"},{l:"Right shoulder"}])],
   "Fitness":[cardio("Run","km","perkm",100),cardio("Walk","km","perkm",100),cardio("Swim","m","per100m",5000),cardio("Cycle","km","kmh",200),
     pr("Push-ups",one("Push-ups"),{period:"day",target:50}),pr("Sit-ups",one("Sit-ups"),{period:"day",target:50}),
     pr("Pull-ups",one("Pull-ups"),{period:"day",target:10}),pr("Squats",one("Squats"),{period:"day",target:50})],
@@ -323,7 +323,19 @@ function longestStreak(set){
   return best;
 }
 function activeDaysLast(set,n){var c=0,tk=today();for(var i=0;i<n;i++){if(set[addDays(tk,-i)]) c++;}return c;}
-function recentPace(sk,sid,n){var t=0,k=today();for(var i=0;i<n;i++){t+=dayVal(sk,addDays(k,-i),sid);}return t/n;}
+/* pace window: the last n days, but never longer than the time since the first log, so a new start isn't diluted by empty days */
+function paceWindow(sk,sid,n){
+  var first=null;
+  Object.keys(sk.log).forEach(function(d){ if(dayVal(sk,d,sid)>0&&(first===null||d<first)) first=d; });
+  if(first===null) return 0;
+  var since=Math.round((parseKey(today())-parseKey(first))/86400000)+1;
+  return Math.max(1,Math.min(n,since));
+}
+function recentPace(sk,sid,n){
+  var w=paceWindow(sk,sid,n); if(!w) return 0;
+  var t=0,k=today(); for(var i=0;i<w;i++){t+=dayVal(sk,addDays(k,-i),sid);}
+  return t/w;
+}
 function sumDays(sk,n){var t=0,k=today();for(var i=0;i<n;i++){t+=dayTotal(sk,addDays(k,-i));}return t;}
 function bestDay(sk){
   var best=0, when=null;
@@ -352,7 +364,7 @@ function etaDays(sk){
   for(var i=0;i<sk.sides.length;i++){
     var s=sk.sides[i]; if(!(s.target>0)) continue; has=true;
     var left=s.target-total(sk,s.id); if(left<=0) continue;
-    var pace=recentPace(sk,s.id,14); if(pace<=0) return null;
+    var pace=recentPace(sk,s.id,14); if(pace<=0||paceWindow(sk,s.id,14)<3) return null;
     worst=Math.max(worst,Math.ceil(left/pace));
   }
   return has?worst:null;
@@ -948,8 +960,8 @@ function skillCard(sk){
       var left=s.target-total(sk,s.id), l;
       if(left<=0) l="goal reached";
       else {
-        var pace=recentPace(sk,s.id,14);
-        l=pace>0?"about "+fmt(Math.ceil(left/pace))+" days ("+midDay(addDays(today(),Math.ceil(left/pace)))+")":"no recent activity";
+        var pw=paceWindow(sk,s.id,14), pace=recentPace(sk,s.id,14);
+        l=(pw>0&&pw<3)?"needs a few more days of data":pace>0?"about "+fmt(Math.ceil(left/pace))+" days ("+midDay(addDays(today(),Math.ceil(left/pace)))+")":"no recent activity";
       }
       lines+='<div>'+esc(s.label)+': '+l+'</div>';
     });
